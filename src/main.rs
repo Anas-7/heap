@@ -20,6 +20,7 @@ use Definition::*;
 
 enum Expr {
     Num(i32),
+    Array(i32, Vec<Expr>),
     True,
     False,
     Add1(Box<Expr>),
@@ -50,10 +51,19 @@ enum Expr {
 fn parse_expr(s: &Sexp) -> Expr {
     match s {
         Sexp::Atom(I(n)) => Expr::Num(i32::try_from(*n).unwrap()),
+        // Write the expression for Array(i32, Vec<Expr>)
         Sexp::Atom(S(name)) if name == "true" => Expr::True,
         Sexp::Atom(S(name)) if name == "false" => Expr::False,
         Sexp::Atom(S(name)) => Expr::Id(name.to_string()),
         Sexp::List(vec) => match &vec[..] {
+            [Sexp::Atom(S(op)), Sexp::Atom(I(n)), exprs @ ..] if op == "array" => {
+                // Check length of exprs is n and return error if not same
+                if (exprs.len() as i32) != i32::try_from(*n).unwrap() {
+                    panic!("parse error, exprs length = {}, n = {}", exprs.len(), n);
+                }
+                
+                Expr::Array(i32::try_from(*n).unwrap(), exprs.into_iter().map(parse_expr).collect())
+            }
             [Sexp::Atom(S(op)), e] if op == "add1" => Expr::Add1(Box::new(parse_expr(e))),
             [Sexp::Atom(S(op)), e] if op == "sub1" => Expr::Sub1(Box::new(parse_expr(e))),
             [Sexp::Atom(S(op)), e] if op == "fst" => Expr::Fst(Box::new(parse_expr(e))),
@@ -243,6 +253,55 @@ fn compile_expr(
               {endloop}:
             "
             )
+        }
+        Expr::Array(size, exprs) =>{
+            let mut instrs = String::new();
+            // First move the size into rsp + offset
+            instrs += &format!("
+            mov rax, {size}
+            mov [rsp + {si}], rax
+            ", si = si * 8, size = size * 2);
+            // So now create a mutable size variable. This is for the first for loop
+            let mut mut_size = si + 1;
+            
+            //Iterate over each expression
+            for expr in exprs{
+                //Compile the expression. We want to preserve the stack of the vector so we send in the size + 1
+                let expr_instrs = compile_expr(expr, si + *size + 1, env, brake, l);
+                //Move the expression into the array
+                let offset = mut_size * 8;
+                instrs += &format!("
+                {expr_instrs}
+                mov [rsp + {offset}], rax
+                ", expr_instrs = expr_instrs, offset = offset);
+                // Increase offset by 1
+                mut_size += 1;
+            }
+
+            // Now we need to take the rsp values from si to the size of the array and move them into r15
+            // Iterate from 0 to size + 1
+            for i in 0..(*size + 1){
+                let r15_offset = i * 8;
+                let si_offset = (si + i) * 8;
+                let expr1 = format!("
+                mov rax, [rsp + {si_offset}]
+                mov [r15 + {r15_offset}], rax", r15_offset = r15_offset, si_offset = si_offset);
+                instrs += &format!("
+                {expr1}
+                ", expr1 = expr1);
+            }
+            // Store the value of r15 into rax
+            instrs += &format!("
+            mov rax, r15
+            add rax, 1
+            ");
+            // Adjust the r15 to the new empty position in heap. This is the size of the array + 1
+            let r15_offset = (*size + 1) * 8;
+            instrs += &format!("
+            add r15, {r15_offset}
+            ", r15_offset = r15_offset);
+
+            instrs
         }
         Expr::Block(es) => es
             .into_iter()
@@ -477,6 +536,16 @@ fn compile_expr(
 fn depth(e: &Expr) -> i32 {
     match e {
         Expr::Num(_) => 0,
+        Expr::Array(size, exprs) => {
+            let mut max = 0;
+            for e in exprs {
+                let d = depth(e);
+                if d > max {
+                    max = d;
+                }
+            }
+            size + 1 + max
+        }//(size+1).max(exprs.iter().map(|e| (depth(e))).max().unwrap_or(0)),
         Expr::True => 0,
         Expr::False => 0,
         Expr::Add1(expr) => depth(expr),
