@@ -24,6 +24,7 @@ enum Expr {
     Index(Box<Expr>, Box<Expr>),
     SetIndex(Box<Expr>, Box<Expr>, Box<Expr>),
     ReferenceEquality(Box<Expr>, Box<Expr>),
+    StructuralEquality(Box<Expr>, Box<Expr>),
     True,
     False,
     Add1(Box<Expr>),
@@ -75,6 +76,8 @@ fn parse_expr(s: &Sexp) -> Expr {
             }
             [Sexp::Atom(S(op)), e1, e2] if op == "==" => {
                 Expr::ReferenceEquality(Box::new(parse_expr(e1)), Box::new(parse_expr(e2)))
+            }[Sexp::Atom(S(op)), e1, e2] if op == "===" => {
+                Expr::StructuralEquality(Box::new(parse_expr(e1)), Box::new(parse_expr(e2)))
             }
             [Sexp::Atom(S(op)), e] if op == "add1" => Expr::Add1(Box::new(parse_expr(e))),
             [Sexp::Atom(S(op)), e] if op == "sub1" => Expr::Sub1(Box::new(parse_expr(e))),
@@ -434,6 +437,28 @@ fn compile_expr(
 
             instrs
         }
+        Expr::StructuralEquality(expr1, expr2) =>{
+            let mut instrs = String::new();
+            let e1_instrs = compile_expr(expr1, si, env, brake, l);
+            let e2_instrs = compile_expr(expr2, si, env, brake, l);
+            instrs += &format!("
+                {e1_instrs}
+                mov rbx, rax
+                {e2_instrs}
+                mov rcx, rax
+                sub rsp, 24
+                mov [rsp], rdi
+                mov [rsp + 8], rsi
+                mov rdi, rbx
+                mov rsi, rcx
+                call structural_check
+                mov rdi, [rsp]
+                mov rsi, [rsp + 8]
+                add rsp, 24
+            ");
+
+            instrs
+        }
         Expr::Block(es) => es
             .into_iter()
             .map(|e| compile_expr(e, si, env, brake, l))
@@ -680,6 +705,7 @@ fn depth(e: &Expr) -> i32 {
         Expr::Index(expr1, expr2) => depth(expr1).max(depth(expr2) + 1),
         Expr::SetIndex(expr1, expr2, expr3) => depth(expr1).max(depth(expr2)).max(depth(expr3)), // TODO: Check this
         Expr::ReferenceEquality(expr1, expr2) => depth(expr1).max(depth(expr2) + 1),
+        Expr::StructuralEquality(expr1, expr2) => depth(expr1).max(depth(expr2) + 1),
         Expr::True => 0,
         Expr::False => 0,
         Expr::Add1(expr) => depth(expr),
@@ -782,6 +808,7 @@ section .text
 global our_code_starts_here
 extern snek_error
 extern snek_print
+extern structural_check
 throw_error:
   ;push rsp
   mov rdi, rbx
