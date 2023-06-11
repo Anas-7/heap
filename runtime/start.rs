@@ -15,6 +15,56 @@ pub fn snek_error(errcode : i64) {
   std::process::exit(1);
 }
 
+fn structural_eq(val1: i64, val2: i64, seen : &mut Vec<(i64, i64)>) -> bool{
+  if val1 != val2 {
+    // Only if they are addresses then we need to check
+    if (val1 != 1 && val1 & 1 == 1) && (val2 != 1 && val2 & 1 == 1){
+      if seen.contains(&(val1, val2))  { return true }
+      seen.push((val1, val2));
+      let addr1 = (val1 - 1) as *const i64;
+      let addr2 = (val2 - 1) as *const i64;
+      let size1 = unsafe { *addr1 } / 2;
+      let size2 = unsafe { *addr2 } / 2;
+      if size1 != size2{
+        return false;
+      }
+      for i in 0..size1 {
+        let elt1 = unsafe { *addr1.offset(1 + i as isize) };
+        let elt2 = unsafe { *addr2.offset(1 + i as isize) };
+        if structural_eq(elt1, elt2, seen) == false{
+          return false;
+        }
+      }
+      seen.pop();
+      return true;
+
+    }
+    else{
+      return false;
+    }
+  }
+  else{
+    return true;
+  }
+}
+#[no_mangle]
+#[export_name = "\x01structural_check"]
+fn structual_check(val1: i64, val2: i64) -> i32{
+  let mut seen = Vec::<(i64, i64)>::new();
+  if val1 == 7 || val1 == 3 || val1 % 2 == 0 || val1 == 1{
+    //println!("val1 is {}", val1);
+    snek_error(900)
+  }
+  if val2 == 7 || val2 == 3 || val2 % 2 == 0 || val2 == 1{
+    //println!("val2 is {}", val2);
+    snek_error(900)
+  }
+  if structural_eq(val1, val2, &mut seen) == true{
+    return 7;
+  }
+  return 3;
+}
+
 // let's change snek_str to print ... when it visits a cyclic value
 fn snek_str(val : i64, seen : &mut Vec<i64>) -> String {
   if val == 7 { "true".to_string() }
