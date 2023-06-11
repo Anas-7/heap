@@ -739,7 +739,10 @@ fn compile_program(p: &Program) -> (String, String) {
         defs.push_str(&compile_definition(&def, &mut labels));
     }
     let depth = depth(&p.main);
-    let offset = depth * 8;
+    let mut offset = depth * 8;
+    if offset % 16 != 0 {
+        offset += 8;
+    }
     let main = compile_expr(&p.main, 0, &HashMap::new(), &String::from(""), &mut labels);
     let main_with_offsetting = format!(
         "

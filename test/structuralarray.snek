@@ -1,1 +1,1 @@
-(=== (array 2 3 4) (array 2 3 4))
+(let (p (array 2 1 (array 1 2))) (print p))
