@@ -22,12 +22,19 @@ fn snek_str(val : i64, seen : &mut Vec<i64>) -> String {
   else if val % 2 == 0 { format!("{}", val >> 1) }
   else if val == 1 { "nil".to_string() }
   else if val & 1 == 1 {
-    if seen.contains(&val)  { return "(pair <cyclic>)".to_string() }
+    if seen.contains(&val)  { return "(pair/vector <cyclic>)".to_string() }
     seen.push(val);
     let addr = (val - 1) as *const i64;
-    let fst = unsafe { *addr };
-    let snd = unsafe { *addr.offset(1) };
-    let result = format!("(pair {} {})", snek_str(fst, seen), snek_str(snd, seen));
+    let size = unsafe { *addr } / 2;
+    let mut vals = String::new();
+    for i in 0..size {
+      let elt = unsafe { *addr.offset(1 + i as isize) };
+      vals += &format!(" {}", snek_str(elt, seen));
+    }
+    let result = format!("(array{})", vals);
+    // let fst = unsafe { *addr };
+    // let snd = unsafe { *addr.offset(1) };
+    // let result = format!("(pair {} {})", snek_str(fst, seen), snek_str(snd, seen));
     seen.pop();
     return result;
   }
