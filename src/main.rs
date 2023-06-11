@@ -23,6 +23,7 @@ enum Expr {
     Array(i32, Vec<Expr>),
     Index(Box<Expr>, Box<Expr>),
     SetIndex(Box<Expr>, Box<Expr>, Box<Expr>),
+    ReferenceEquality(Box<Expr>, Box<Expr>),
     True,
     False,
     Add1(Box<Expr>),
@@ -71,6 +72,9 @@ fn parse_expr(s: &Sexp) -> Expr {
             }
             [Sexp::Atom(S(op)), e1, e2, e3] if op == "setindex!" => {
                 Expr::SetIndex(Box::new(parse_expr(e1)), Box::new(parse_expr(e2)), Box::new(parse_expr(e3)))
+            }
+            [Sexp::Atom(S(op)), e1, e2] if op == "==" => {
+                Expr::ReferenceEquality(Box::new(parse_expr(e1)), Box::new(parse_expr(e2)))
             }
             [Sexp::Atom(S(op)), e] if op == "add1" => Expr::Add1(Box::new(parse_expr(e))),
             [Sexp::Atom(S(op)), e] if op == "sub1" => Expr::Sub1(Box::new(parse_expr(e))),
@@ -202,10 +206,10 @@ fn compile_expr(
 ) -> String {
     match e {
         Expr::Num(n) => format!("mov rax, {}", *n << 1),
-        Expr::True => format!("mov rax, {}", 3),
-        Expr::False => format!("mov rax, {}", 1),
+        Expr::True => format!("mov rax, {}", 7),
+        Expr::False => format!("mov rax, {}", 3),
         Expr::Id(s) if s == "input" => format!("mov rax, rdi"),
-        Expr::Id(s) if s == "nil" => format!("mov rax, 0x1"),
+        Expr::Id(s) if s == "nil" => format!("mov rax, 1"),
         Expr::Id(s) => {
             let offset = env.get(s).unwrap() * 8;
             format!("mov rax, [rsp + {offset}]")
@@ -321,9 +325,9 @@ fn compile_expr(
             {e1_instrs}
             cmp rax, 1         
             je throw_error     
-            cmp rax, 3         
+            cmp rax, 7         
             je throw_error     ; Jump if equal (value is 3)
-            cmp rax, 5         
+            cmp rax, 3         
             je throw_error     ; Jump if equal (value is 5)
             test rax, 1        ; Test if the last bit is set
             jz throw_error     ; Jump if zero (last bit is not set)
@@ -353,9 +357,9 @@ fn compile_expr(
             {e1_instrs}
             cmp rax, 1         
             je throw_error     
-            cmp rax, 3         
+            cmp rax, 7         
             je throw_error     ; Jump if equal (value is 3)
-            cmp rax, 5         
+            cmp rax, 3         
             je throw_error     ; Jump if equal (value is 5)
             test rax, 1        ; Test if the last bit is set
             jz throw_error     ; Jump if zero (last bit is not set)
@@ -367,9 +371,9 @@ fn compile_expr(
             ; Ensure that the index obtained from e2_instrs is actually a number, i.e., has last bit 0
             cmp rax, 1
             je throw_error
-            cmp rax, 3
+            cmp rax, 7
             je throw_error
-            cmp rax, 5
+            cmp rax, 3
             je throw_error
             test rax, 1
             jnz throw_error ; Jump if not zero (last bit is set)
@@ -387,6 +391,47 @@ fn compile_expr(
             add rbx, 1
             mov rax, rbx
             ");
+            instrs
+        }
+        Expr::ReferenceEquality(e1, e2) =>{
+            let mut instrs = String::new();
+            let e1_instrs = compile_expr(e1, si, env, brake, l);
+            let e2_instrs = compile_expr(e2, si, env, brake, l);
+            instrs += &format!("
+            {e1_instrs}
+            cmp rax, 1         
+            je throw_error     
+            cmp rax, 7         
+            je throw_error     ; Jump if equal (value is 3)
+            cmp rax, 3         
+            je throw_error     ; Jump if equal (value is 5)
+            test rax, 1        ; Test if the last bit is set
+            jz throw_error     ; Jump if zero (last bit is not set)
+
+            sub rax, 1
+            mov rbx, rax
+
+            {e2_instrs}
+            cmp rax, 1         
+            je throw_error     
+            cmp rax, 7         
+            je throw_error     ; Jump if equal (value is 3)
+            cmp rax, 3         
+            je throw_error     ; Jump if equal (value is 5)
+            test rax, 1        ; Test if the last bit is set
+            jz throw_error     ; Jump if zero (last bit is not set)
+
+            sub rax, 1
+            mov rcx, rax
+
+            mov rax, 7
+            mov [rsp + {si}], rax
+            mov rax, 3
+            cmp rbx, rcx
+            cmove rax, [rsp + {si}]
+            ", si = si * 8);
+
+
             instrs
         }
         Expr::Block(es) => es
@@ -634,6 +679,7 @@ fn depth(e: &Expr) -> i32 {
         }//(size+1).max(exprs.iter().map(|e| (depth(e))).max().unwrap_or(0)),
         Expr::Index(expr1, expr2) => depth(expr1).max(depth(expr2) + 1),
         Expr::SetIndex(expr1, expr2, expr3) => depth(expr1).max(depth(expr2)).max(depth(expr3)), // TODO: Check this
+        Expr::ReferenceEquality(expr1, expr2) => depth(expr1).max(depth(expr2) + 1),
         Expr::True => 0,
         Expr::False => 0,
         Expr::Add1(expr) => depth(expr),
