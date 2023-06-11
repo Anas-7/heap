@@ -21,6 +21,8 @@ use Definition::*;
 enum Expr {
     Num(i32),
     Array(i32, Vec<Expr>),
+    Index(Box<Expr>, Box<Expr>),
+    SetIndex(Box<Expr>, Box<Expr>, Box<Expr>),
     True,
     False,
     Add1(Box<Expr>),
@@ -63,6 +65,12 @@ fn parse_expr(s: &Sexp) -> Expr {
                 }
                 
                 Expr::Array(i32::try_from(*n).unwrap(), exprs.into_iter().map(parse_expr).collect())
+            }
+            [Sexp::Atom(S(op)), e1, e2] if op == "index" => {
+                Expr::Index(Box::new(parse_expr(e1)), Box::new(parse_expr(e2)))
+            }
+            [Sexp::Atom(S(op)), e1, e2, e3] if op == "setindex!" => {
+                Expr::SetIndex(Box::new(parse_expr(e1)), Box::new(parse_expr(e2)), Box::new(parse_expr(e3)))
             }
             [Sexp::Atom(S(op)), e] if op == "add1" => Expr::Add1(Box::new(parse_expr(e))),
             [Sexp::Atom(S(op)), e] if op == "sub1" => Expr::Sub1(Box::new(parse_expr(e))),
@@ -301,6 +309,84 @@ fn compile_expr(
             add r15, {r15_offset}
             ", r15_offset = r15_offset);
 
+            instrs
+        }
+        Expr::Index(e1, e2) => {
+            let mut instrs = String::new();
+            // First compile the expression that is the array
+            let e1_instrs = compile_expr(e1, si, env, brake, l);
+            // Now compile the expression that is the index
+            let e2_instrs = compile_expr(e2, si + 1, env, brake, l);
+            instrs += &format!("
+            {e1_instrs}
+            cmp rax, 1         
+            je throw_error     
+            cmp rax, 3         
+            je throw_error     ; Jump if equal (value is 3)
+            cmp rax, 5         
+            je throw_error     ; Jump if equal (value is 5)
+            test rax, 1        ; Test if the last bit is set
+            jz throw_error     ; Jump if zero (last bit is not set)
+
+            sub rax, 1
+            mov rbx, rax
+            {e2_instrs}
+            shr rax, 1
+            mov rcx, [rbx]
+            shr rcx, 1
+            cmp rcx, rax
+            ; If rax is greater than rbx, throw error
+            jle throw_error
+            mov rax, [rbx + (rax+1) * 8]
+            ");
+            instrs
+        }
+        // This follows array location, index, value
+        Expr::SetIndex(e1, e2, e3) => {
+            let mut instrs = String::new();
+            // First compile the expression that is the array
+            let e1_instrs = compile_expr(e1, si, env, brake, l);
+            // Now compile the expression that is the index
+            let e2_instrs = compile_expr(e2, si, env, brake, l);
+            let e3_instrs = compile_expr(e3, si, env, brake, l);
+            instrs += &format!("
+            {e1_instrs}
+            cmp rax, 1         
+            je throw_error     
+            cmp rax, 3         
+            je throw_error     ; Jump if equal (value is 3)
+            cmp rax, 5         
+            je throw_error     ; Jump if equal (value is 5)
+            test rax, 1        ; Test if the last bit is set
+            jz throw_error     ; Jump if zero (last bit is not set)
+            
+            sub rax, 1
+            mov rbx, rax
+            ; e2 instrs
+            {e2_instrs}
+            ; Ensure that the index obtained from e2_instrs is actually a number, i.e., has last bit 0
+            cmp rax, 1
+            je throw_error
+            cmp rax, 3
+            je throw_error
+            cmp rax, 5
+            je throw_error
+            test rax, 1
+            jnz throw_error ; Jump if not zero (last bit is set)
+
+            shr rax, 1
+            mov rcx, [rbx]
+            shr rcx, 1
+            cmp rcx, rax
+            ; If rax is greater than rbx, throw error
+            jle throw_error
+            mov rcx, rax
+            ; e3 instrs
+            {e3_instrs}
+            mov [rbx + (rcx+1) * 8], rax
+            add rbx, 1
+            mov rax, rbx
+            ");
             instrs
         }
         Expr::Block(es) => es
@@ -546,6 +632,8 @@ fn depth(e: &Expr) -> i32 {
             }
             size + 1 + max
         }//(size+1).max(exprs.iter().map(|e| (depth(e))).max().unwrap_or(0)),
+        Expr::Index(expr1, expr2) => depth(expr1).max(depth(expr2) + 1),
+        Expr::SetIndex(expr1, expr2, expr3) => depth(expr1).max(depth(expr2)).max(depth(expr3)), // TODO: Check this
         Expr::True => 0,
         Expr::False => 0,
         Expr::Add1(expr) => depth(expr),
@@ -649,7 +737,7 @@ global our_code_starts_here
 extern snek_error
 extern snek_print
 throw_error:
-  push rsp
+  ;push rsp
   mov rdi, rbx
   call snek_error
   ret
